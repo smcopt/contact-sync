@@ -12,8 +12,14 @@ SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly'
 ]
 
-# Note: We now start at A1 to read the HEADERS
-SHEET_RANGE = 'MAIN!A1:Z' 
+# TARGET SHEET: Tab 'MAIN', starting at Row 6
+SHEET_RANGE = 'MAIN!A6:Z'
+
+# SAFETY LIST: Emails the script will NEVER remove
+PROTECTED_EMAILS = [
+    'info@smcopt.org',
+    'sujanpaudel@iom.int'
+]
 
 def get_delegated_credentials():
     """Authenticates using Workload Identity + Domain-Wide Delegation."""
@@ -31,35 +37,36 @@ def get_delegated_credentials():
 
 def safe_add(service, group_email, user_email):
     """Adds user to group. Ignores if already there."""
-    # print(f"   [+] Adding {user_email} -> {group_email}") 
     try:
         body = {'email': user_email, 'role': 'MEMBER'}
         service.members().insert(groupKey=group_email, body=body).execute()
         print(f"   [+] ADDED: {user_email} -> {group_email}")
     except HttpError as e:
         if e.resp.status == 409:
-            # print(f"       (Already in {group_email})")
-            pass # Silent success
+            pass # Silent success (Already exists)
         elif e.resp.status == 404:
-            print(f"       [!] Group '{group_email}' not found in Workspace.")
+            print(f"       [!] Group '{group_email}' not found.")
         else:
             print(f"       [!] Error adding to {group_email}: {e}")
 
 def safe_remove(service, group_email, user_email):
     """Removes user from group. Ignores if not in it."""
-    # print(f"   [-] Removing {user_email} <- {group_email}")
+    
+    if user_email in PROTECTED_EMAILS:
+        print(f"       [!] PROTECTED USER: {user_email} (Skipping removal)")
+        return
+
     try:
         service.members().delete(groupKey=group_email, memberKey=user_email).execute()
         print(f"   [-] REMOVED: {user_email} <- {group_email}")
     except HttpError as e:
         if e.resp.status == 404:
-            # print(f"       (Not in {group_email})")
-            pass # Silent success
+            pass # Silent success (Not in group)
         else:
             print(f"       [!] Error removing from {group_email}: {e}")
 
 def main():
-    print("--- Starting Matrix Sync ---")
+    print("--- Starting Matrix Sync (Row 6 Headers) ---")
     
     # 1. Authenticate
     try:
@@ -72,66 +79,74 @@ def main():
 
     # 2. Read Sheet
     sheet_id = os.environ.get('GOOGLE_SHEET_ID')
-    result = service_sheets.spreadsheets().values().get(
-        spreadsheetId=sheet_id, range=SHEET_RANGE).execute()
-    rows = result.get('values', [])
-
-    if len(rows) < 2:
-        print("Sheet is empty or missing headers.")
+    
+    try:
+        result = service_sheets.spreadsheets().values().get(
+            spreadsheetId=sheet_id, range=SHEET_RANGE).execute()
+        rows = result.get('values', [])
+    except HttpError as e:
+        print(f"FATAL: Could not read sheet 'MAIN'. Check permissions. Error: {e}")
         return
 
-    # 3. Parse Headers (Row 1)
+    if len(rows) < 2:
+        print("Sheet data is too short (needs header row + data rows).")
+        return
+
+    # 3. Parse Headers (The first row we pulled is Row 6 of the sheet)
     headers = rows[0]
     
     # Create a map of {Column Index: Group Email}
-    # We skip Col 0 (User) and Col 1 (Status) -> Start at index 2
+    # We skip cols A(0), B(1), C(2), D(3=User), E(4=Status)
     group_map = {}
-    print("Found Groups in Headers:")
+    print("Found Groups in Headers (Row 6):")
+    
     for idx, header in enumerate(headers):
-        if idx < 2: continue # Skip User/Status columns
+        if idx < 5: continue # Skip non-group columns
         
-        # Simple validation: Must look like an email
-        if '@' in header:
-            group_map[idx] = header.strip()
-            print(f" - Col {idx}: {header.strip()}")
+        clean_header = header.strip()
+        if '@' in clean_header:
+            group_map[idx] = clean_header
+            print(f" - Col {idx}: {clean_header}")
             
     print("-" * 30)
 
-    # 4. Process Users (Rows 2 onwards)
+    # 4. Process Users (Starting from Row 7 onwards)
     for row in rows[1:]:
         if not row: continue
         
-        user_email = row[0].strip()
+        # Check if row has enough columns to contain an email (Index 3)
+        if len(row) <= 3: continue 
+        
+        user_email = row[3].strip() # Column D is Index 3
         if not user_email: continue
 
-        # Read Status (Default to Inactive if missing)
-        # Check if row has Col 1, otherwise default Inactive
-        status = row[1].strip().lower() if len(row) > 1 else 'inactive'
+        # Status is Column E (Index 4). Default to 'inactive' if missing.
+        status = 'inactive'
+        if len(row) > 4:
+            status = row[4].strip().lower()
 
         print(f"Processing: {user_email} [{status.upper()}]")
 
-        # Iterate through every known group column
+        # Iterate through every group column found in headers
         for col_idx, group_email in group_map.items():
             
-            # DEFAULT ACTION: REMOVE
-            # We assume remove unless we find a specific "Yes"
             should_add = False 
 
-            # Only check for "Yes" if the user is Active
             if status == 'active':
-                # Get cell value safely (row might be shorter than headers)
                 cell_value = ""
+                # Check if this specific row has data in this column
                 if col_idx < len(row):
                     cell_value = row[col_idx].strip().lower()
                 
+                # Check for "Yes"
                 if cell_value == 'yes':
                     should_add = True
             
-            # Execute Action
+            # Execute
             if should_add:
                 safe_add(service_admin, group_email, user_email)
             else:
-                # Remove if Status=Inactive OR Cell != Yes OR Cell is Blank
+                # Remove if Inactive, Blank, or "No"
                 safe_remove(service_admin, group_email, user_email)
 
 if __name__ == '__main__':
