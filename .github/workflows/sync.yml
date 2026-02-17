@@ -1,0 +1,54 @@
+name: Group Sync Automation
+
+on:
+  # 1. Run automatically every day at 8:00 AM UTC
+  schedule:
+    - cron: '0 8 * * *'
+  
+  # 2. Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+  # 3. Allow Google Sheets to trigger this via Webhook
+  repository_dispatch:
+    types: [sheet_update]
+
+# --- CRITICAL PERMISSION FOR KEYLESS AUTH ---
+permissions:
+  contents: 'read'
+  id-token: 'write' # Required for Workload Identity Federation
+
+jobs:
+  sync_groups:
+    name: Run Group Sync
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # --- KEYLESS AUTHENTICATION ---
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # --- SETUP PYTHON ---
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # --- INSTALL DEPENDENCIES ---
+      - name: Install Python Libraries
+        run: |
+          pip install --upgrade pip
+          pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
+
+      # --- RUN THE SYNC SCRIPT ---
+      - name: Execute Sync Script
+        env:
+          WORKSPACE_ADMIN_EMAIL: ${{ secrets.WORKSPACE_ADMIN_EMAIL }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: python sync_groups.py
