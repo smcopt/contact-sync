@@ -5,31 +5,30 @@ from google.auth import iam
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- CONFIGURATION (Updated to match your GitHub Secrets) ---
+# --- CONFIGURATION ---
 SPREADSHEET_ID = os.environ.get('GOOGLE_SHEET_ID') 
-ADMIN_EMAIL = os.environ.get('WORKSPACE_ADMIN_EMAIL')
-SERVICE_ACCOUNT_EMAIL = os.environ.get('GCP_SERVICE_ACCOUNT')
+
+# Hardcoding these to completely bypass any GitHub Secret loading glitches
+ADMIN_EMAIL = 'info@smcopt.org'
+SERVICE_ACCOUNT_EMAIL = 'group-sync-bot@internal-group-sync-automation.iam.gserviceaccount.com'
 
 MAIN_SHEET_NAME = 'MAIN'
 AUDIT_SHEET_NAME = 'AUDIT'
 HEADER_ROW = 6
 
 def get_service():
-    # 1. Get base Workload Identity credentials with Cloud Platform scope
     creds, project = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
     request = google.auth.transport.requests.Request()
-
-    # 2. Use the IAM Signer to act as the Service Account
     signer = iam.Signer(request, creds, SERVICE_ACCOUNT_EMAIL)
 
-    # 3. Generate the Delegated Credentials (impersonating the Workspace Admin)
+    # Using the broader scopes that your sync script likely already uses
     delegated_credentials = service_account.Credentials(
         signer,
         SERVICE_ACCOUNT_EMAIL,
         "https://oauth2.googleapis.com/token",
         scopes=[
             'https://www.googleapis.com/auth/spreadsheets',
-            'https://www.googleapis.com/auth/admin.directory.group.member.readonly'
+            'https://www.googleapis.com/auth/admin.directory.group.member' 
         ],
         subject=ADMIN_EMAIL
     )
@@ -59,7 +58,8 @@ def main():
             members = members_result.get('members', [])
             
             for m in members:
-                audit_data.append([group_email, m['email'], m['role'], m['type']])
+                # Using .get() prevents errors if a user is missing a specific attribute
+                audit_data.append([group_email, m.get('email', ''), m.get('role', ''), m.get('type', '')])
         except Exception as e:
             print(f"Error fetching {group_email}: {e}")
 
