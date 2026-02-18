@@ -52,3 +52,9 @@ jobs:
           WORKSPACE_ADMIN_EMAIL: ${{ secrets.WORKSPACE_ADMIN_EMAIL }}
           GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
         run: python sync_groups.py
+
+      # --- RUN THE AUDIT SCRIPT ---
+      - name: Run Audit Script
+        env:
+          GCP_SPREADSHEET_ID: ${{ secrets.GCP_SPREADSHEET_ID }}
+        run: python audit_groups.py
