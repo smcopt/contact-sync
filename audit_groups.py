@@ -5,10 +5,11 @@ from google.auth import iam
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-# --- CONFIGURATION ---
-SPREADSHEET_ID = os.environ.get('GCP_SPREADSHEET_ID')
-SERVICE_ACCOUNT_EMAIL = 'group-sync-bot@internal-group-sync-automation.iam.gserviceaccount.com'
-ADMIN_EMAIL = 'info@smcopt.org'
+# --- CONFIGURATION (Updated to match your GitHub Secrets) ---
+SPREADSHEET_ID = os.environ.get('GOOGLE_SHEET_ID') 
+ADMIN_EMAIL = os.environ.get('WORKSPACE_ADMIN_EMAIL')
+SERVICE_ACCOUNT_EMAIL = os.environ.get('GCP_SERVICE_ACCOUNT')
+
 MAIN_SHEET_NAME = 'MAIN'
 AUDIT_SHEET_NAME = 'AUDIT'
 HEADER_ROW = 6
@@ -19,7 +20,6 @@ def get_service():
     request = google.auth.transport.requests.Request()
 
     # 2. Use the IAM Signer to act as the Service Account
-    # This leverages the 'Service Account Token Creator' role you previously set up
     signer = iam.Signer(request, creds, SERVICE_ACCOUNT_EMAIL)
 
     # 3. Generate the Delegated Credentials (impersonating the Workspace Admin)
