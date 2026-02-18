@@ -1,23 +1,38 @@
 import os
 import google.auth
+import google.auth.transport.requests
+from google.auth import iam
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 # --- CONFIGURATION ---
 SPREADSHEET_ID = os.environ.get('GCP_SPREADSHEET_ID')
+SERVICE_ACCOUNT_EMAIL = 'group-sync-bot@internal-group-sync-automation.iam.gserviceaccount.com'
+ADMIN_EMAIL = 'info@smcopt.org'
 MAIN_SHEET_NAME = 'MAIN'
 AUDIT_SHEET_NAME = 'AUDIT'
-HEADER_ROW = 6  # Your headers are on row 6
+HEADER_ROW = 6
 
 def get_service():
-    # Uses the same Workload Identity Federation credentials
-    credentials, project = google.auth.default(
+    # 1. Get base Workload Identity credentials with Cloud Platform scope
+    creds, project = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+    request = google.auth.transport.requests.Request()
+
+    # 2. Use the IAM Signer to act as the Service Account
+    # This leverages the 'Service Account Token Creator' role you previously set up
+    signer = iam.Signer(request, creds, SERVICE_ACCOUNT_EMAIL)
+
+    # 3. Generate the Delegated Credentials (impersonating the Workspace Admin)
+    delegated_credentials = service_account.Credentials(
+        signer,
+        SERVICE_ACCOUNT_EMAIL,
+        "https://oauth2.googleapis.com/token",
         scopes=[
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/admin.directory.group.member.readonly'
-        ]
+        ],
+        subject=ADMIN_EMAIL
     )
-    # Impersonate your admin user (same logic as sync_groups.py)
-    delegated_credentials = credentials.with_subject('info@smcopt.org')
     
     sheets_service = build('sheets', 'v4', credentials=delegated_credentials)
     admin_service = build('admin', 'directory_v1', credentials=delegated_credentials)
@@ -26,12 +41,12 @@ def get_service():
 def main():
     sheets, admin = get_service()
 
-    # 1. Get Group Emails from MAIN sheet header
-    # Range starts from Column F (Index 5) on Row 6
+    # 1. Get Group Emails from MAIN sheet header (starts at Column F)
     result = sheets.spreadsheets().values().get(
         spreadsheetId=SPREADSHEET_ID, range=f"{MAIN_SHEET_NAME}!F{HEADER_ROW}:Z{HEADER_ROW}"
     ).execute()
-    group_emails = result.get('values', [[]])[0]
+    
+    group_emails = result.get('values', [[]])[0] if result.get('values') else []
 
     audit_data = [["Group Email", "Member Email", "Role", "Type"]]
 
@@ -49,12 +64,10 @@ def main():
             print(f"Error fetching {group_email}: {e}")
 
     # 3. Write to AUDIT sheet
-    # First, clear the existing data
     sheets.spreadsheets().values().clear(
         spreadsheetId=SPREADSHEET_ID, range=f"{AUDIT_SHEET_NAME}!A1:Z1000"
     ).execute()
 
-    # Write new data
     sheets.spreadsheets().values().update(
         spreadsheetId=SPREADSHEET_ID,
         range=f"{AUDIT_SHEET_NAME}!A1",
